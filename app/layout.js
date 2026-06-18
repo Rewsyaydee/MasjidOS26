@@ -1,5 +1,6 @@
 import { Inter, Sora, Poppins, Rubik, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
+import { Analytics } from "@vercel/analytics/next";
 
 // Inter for clean, legible body/UI copy (Apple-grade neutrality).
 const inter = Inter({
@@ -48,7 +49,10 @@ export default function RootLayout({ children }) {
       lang="en"
       className={`${inter.variable} ${sora.variable} ${poppins.variable} ${rubik.variable} ${jakarta.variable}`}
     >
-      <body>{children}</body>
+      <body>
+        {children}
+        <Analytics />
+      </body>
     </html>
   );
 }
