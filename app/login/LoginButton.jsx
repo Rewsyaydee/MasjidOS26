@@ -17,10 +17,13 @@ export default function LoginButton() {
     if (!supabase) return;
     setLoading(true);
     setError("");
+    // Use the browser's own origin so the redirect works on ANY domain
+    // (localhost, Vercel preview, custom domain) without an env var.
+    const origin = typeof window !== "undefined" ? window.location.origin : publicConfig.siteUrl;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${publicConfig.siteUrl}/auth/callback`,
+        redirectTo: `${origin}/auth/callback`,
         queryParams: { access_type: "offline", prompt: "consent" },
       },
     });
