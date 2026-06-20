@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { CheckCircle2, Megaphone, Tv, Zap } from "lucide-react";
 import { getSupabaseBrowser } from "@/lib/supabase/client";
@@ -16,6 +16,14 @@ import { pushAnnouncement } from "./actions";
  * realtime channel, so the preview is a true mirror. The "Hantar ujian" button
  * writes display_state, which the DB trigger broadcasts to every TV (and back
  * to this preview) — the visible proof that phone → TV sync is real.
+ *
+ * MOBILE PERFORMANCE: the preview is an animated, blur-heavy, per-second-ticking
+ * surface. To keep the phone dashboard smooth we
+ *   1. render it in `lite` mode (no GSAP entrance, no 130px aurora blurs), and
+ *   2. only MOUNT it while it's actually on-screen AND the tab is visible
+ *      (IntersectionObserver + visibilitychange). Scrolling it away or
+ *      backgrounding the app fully unmounts it, stopping every interval /
+ *      animation instead of burning the main thread in the background.
  */
 export default function AdminDashboard({ mosque, initialState, initialPrayer, screenCount }) {
   const supabase = getSupabaseBrowser();
@@ -32,13 +40,40 @@ export default function AdminDashboard({ mosque, initialState, initialPrayer, sc
     return unsub;
   }, [supabase, mosque.id]);
 
+  // ── Only render the heavy preview while visible + on-screen ──
+  const previewBoxRef = useRef(null);
+  const [onScreen, setOnScreen] = useState(true);
+  const [tabVisible, setTabVisible] = useState(true);
+
+  useEffect(() => {
+    const el = previewBoxRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      ([entry]) => setOnScreen(entry.isIntersecting),
+      { rootMargin: "120px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const onVis = () => setTabVisible(document.visibilityState === "visible");
+    onVis();
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
+  const showPreview = onScreen && tabVisible;
+
   const sendTest = () => {
+    // Optimistic: flash the success state immediately so the phone feels
+    // instant, then reconcile with the server write.
+    setFlash(true);
     startTransition(async () => {
       await pushAnnouncement(
         `Ujian penyegerakan · ${new Date().toLocaleTimeString("ms-MY")}`,
         "high",
       );
-      setFlash(true);
       setTimeout(() => setFlash(false), 2500);
       // Auto-clear the test banner after a few seconds.
       setTimeout(() => startTransition(() => pushAnnouncement(null)), 6000);
@@ -63,11 +98,21 @@ export default function AdminDashboard({ mosque, initialState, initialPrayer, sc
             Disegerak
           </span>
         </div>
-        <div className="overflow-hidden rounded-2xl border border-white/10 bg-black shadow-card">
+        <div
+          ref={previewBoxRef}
+          className="overflow-hidden rounded-2xl border border-white/10 bg-black shadow-card"
+          style={{ contentVisibility: "auto", containIntrinsicSize: "720px 405px" }}
+        >
           <div className="relative aspect-video">
-            <FitToParent>
-              <MosqueDisplay mosque={mosque} prayer={initialPrayer} state={state} />
-            </FitToParent>
+            {showPreview ? (
+              <FitToParent>
+                <MosqueDisplay mosque={mosque} prayer={initialPrayer} state={state} lite />
+              </FitToParent>
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center text-xs text-white/30">
+                <Tv className="mr-2 h-4 w-4" /> Pratonton dijeda
+              </div>
+            )}
           </div>
         </div>
       </section>

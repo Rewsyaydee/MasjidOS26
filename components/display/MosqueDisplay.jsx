@@ -28,7 +28,7 @@ function nextPrayerTarget(times, now) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════ */
-export default function MosqueDisplay({ mosque, prayer, state, donation, transcript, verse }) {
+export default function MosqueDisplay({ mosque, prayer, state, donation, transcript, verse, lite = false }) {
   const accent = mosque?.accent_color || "#e6bd55";
   const logo = mosque?.logo_text || mosque?.name || "Masjid";
   const settings = mosque?.settings || {};
@@ -49,15 +49,16 @@ export default function MosqueDisplay({ mosque, prayer, state, donation, transcr
   const event = state?.active_event;
   const hadith = state?.hadith;
 
-  // GSAP entrance
+  // GSAP entrance. Skipped in `lite` mode (the admin phone preview) so the
+  // mobile dashboard isn't paying for a staggered timeline on every mount.
   const rootRef = useRef(null);
   useEffect(() => {
-    if (!rootRef.current) return;
+    if (lite || !rootRef.current) return;
     const ctx = gsap.context(() => {
       gsap.fromTo(".dt-entrance", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out", stagger: 0.07 });
     }, rootRef);
     return () => ctx.revert();
-  }, []);
+  }, [lite]);
 
   // Coarse 30s tick for prayer highlight
   const [coarseNow, setCoarseNow] = useState(() => new Date());
@@ -72,8 +73,14 @@ export default function MosqueDisplay({ mosque, prayer, state, donation, transcr
     <div ref={rootRef} className="absolute inset-0 flex flex-col overflow-hidden" style={{ width: CANVAS.W, height: CANVAS.H, "--accent": accent, fontFamily: ff }}>
       {/* ambient */}
       <div className="pointer-events-none absolute inset-0" style={{ background: `radial-gradient(60% 40% at 50% 0%, ${accent}14, #05070f 65%)` }} />
-      <div className="mos-aurora-a pointer-events-none absolute -left-[15%] -top-[10%] h-[60%] w-[60%] rounded-full opacity-25 blur-[130px]" style={{ background: `${accent}44` }} />
-      <div className="mos-aurora-b pointer-events-none absolute -right-[10%] top-[40%] h-[45%] w-[50%] rounded-full opacity-20 blur-[140px]" style={{ background: `#1f285766` }} />
+      {/* Heavy GPU blur layers — skipped in `lite` mode (phone preview) where
+          two 130–140px blurs scaled inside a transform were the main jank. */}
+      {!lite && (
+        <>
+          <div className="mos-aurora-a pointer-events-none absolute -left-[15%] -top-[10%] h-[60%] w-[60%] rounded-full opacity-25 blur-[130px]" style={{ background: `${accent}44` }} />
+          <div className="mos-aurora-b pointer-events-none absolute -right-[10%] top-[40%] h-[45%] w-[50%] rounded-full opacity-20 blur-[140px]" style={{ background: `#1f285766` }} />
+        </>
+      )}
       <div className="arabesque pointer-events-none absolute inset-0 opacity-[0.04]" />
 
       {/* khutbah takeover */}
