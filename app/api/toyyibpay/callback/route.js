@@ -33,11 +33,20 @@ export async function POST(request) {
   }
 
   // 2. Locate the donation (prefer order_id, fall back to billcode).
-  const { data: donation } = await admin
+  //    Parameterised lookup — no string interpolation in the filter. orderId
+  //    and billCode are server-set UUIDs but the principle matters.
+  let { data: donation } = await admin
     .from("donations")
     .select("id, status")
-    .or(`id.eq.${orderId},billcode.eq.${billCode}`)
+    .eq("id", orderId)
     .maybeSingle();
+  if (!donation) {
+    ({ data: donation } = await admin
+      .from("donations")
+      .select("id, status")
+      .eq("billcode", billCode)
+      .maybeSingle());
+  }
 
   if (!donation) return NextResponse.json({ ok: true, reason: "unknown" }, { status: 200 });
 
