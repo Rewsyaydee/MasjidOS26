@@ -2,6 +2,18 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase/server";
 import { capabilities, publicConfig } from "@/lib/config";
 import { createBill } from "@/lib/toyyibpay";
+import { rateLimit } from "@/lib/ratelimit";
+
+/** Donor names render on a PUBLIC mosque TV — strip control chars, collapse
+ *  whitespace, and cap length so the ticker can't be abused with junk. */
+function cleanName(raw) {
+  return String(raw || "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+}
 
 /**
  * POST /api/toyyibpay/create-bill
@@ -19,6 +31,20 @@ export async function POST(request) {
   const admin = getSupabaseAdmin();
   if (!admin) return NextResponse.json({ error: "Backend not configured" }, { status: 503 });
 
+  // Best-effort abuse throttle: this endpoint is intentionally public (donors
+  // aren't logged in) and each call creates a pending row + a ToyyibPay bill, so
+  // an unbounded caller could spam both. Cap bursts per client IP.
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "unknown";
+  if (!rateLimit(`donate:${ip}`, { limit: 8, windowMs: 60000 }).allowed) {
+    return NextResponse.json(
+      { error: "Terlalu banyak permintaan. Sila cuba sebentar lagi." },
+      { status: 429 },
+    );
+  }
+
   let body;
   try {
     body = await request.json();
@@ -29,7 +55,7 @@ export async function POST(request) {
   const mosqueId = String(body.mosqueId || "");
   const amount = Number(body.amount);
   const anonymous = Boolean(body.anonymous);
-  const name = anonymous ? "Anonymous" : String(body.name || "").trim().slice(0, 60) || "Anonymous";
+  const name = anonymous ? "Anonymous" : cleanName(body.name) || "Anonymous";
   // Optional payor contact — only used to satisfy ToyyibPay's required fields
   // and send the donor an e-receipt. Never displayed on the TV.
   const email = String(body.email || "").trim().slice(0, 120);
