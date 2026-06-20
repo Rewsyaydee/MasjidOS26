@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { capabilities, serverConfig } from "@/lib/config";
+import { getSupabaseServer } from "@/lib/supabase/server";
 
 /**
  * POST /api/translate  Body: { text, from, to:[...] }
@@ -26,6 +27,26 @@ Rules:
 const MAX_CHARS = 1000;
 
 export async function POST(request) {
+  // Auth gate — translation calls a paid LLM. Without this, a public,
+  // unauthenticated caller could hammer the endpoint and burn the mosque's
+  // API budget. Restrict to a signed-in admin/owner with a mosque (the khutbah
+  // engine on the admin phone is authenticated, so this is transparent there).
+  const supabase = await getSupabaseServer();
+  if (!supabase) return NextResponse.json({ error: "no-backend" }, { status: 503 });
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("mosque_id, role")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (!profile?.mosque_id) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (profile.role !== "admin" && profile.role !== "owner") {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+
   let body;
   try {
     body = await request.json();
