@@ -44,10 +44,22 @@ export async function createMosque(prevState, formData) {
   if (mErr) return { error: `Gagal mencipta masjid: ${mErr.message}` };
 
   // Link the profile to the new mosque (also marks them as owner).
-  const { error: pErr } = await supabase
-    .from("profiles")
-    .update({ mosque_id: mosque.id, role: "owner" })
-    .eq("id", user.id);
+  //
+  // UPSERT (not UPDATE): if the profile row was never created — e.g. the
+  // OAuth-callback insert raced, failed, or the user landed here without one —
+  // a plain UPDATE silently affects 0 rows, the mosque link is never written,
+  // and requireMosque() bounces them straight back here: an /admin ↔ /onboarding
+  // redirect loop. Upserting guarantees the link is persisted either way.
+  const { error: pErr } = await supabase.from("profiles").upsert(
+    {
+      id: user.id,
+      mosque_id: mosque.id,
+      role: "owner",
+      email: user.email,
+      full_name: user.user_metadata?.full_name || user.user_metadata?.name || null,
+    },
+    { onConflict: "id" },
+  );
 
   if (pErr) return { error: `Gagal mengemas kini profil: ${pErr.message}` };
 
