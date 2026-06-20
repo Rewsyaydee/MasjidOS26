@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { BookOpen, ChevronDown, Mic, Radio, Send, Square } from "lucide-react";
 import { getSupabaseBrowser } from "@/lib/supabase/client";
 import { channelName } from "@/lib/realtime";
 import { KhutbahEngine } from "@/lib/khutbah";
 import { setKhutbahLive } from "../actions";
+import { createWakeLock } from "@/lib/wakelock";
 
 const LANGS = [
   { id: "ms", label: "Melayu" },
@@ -13,6 +14,29 @@ const LANGS = [
   { id: "ar", label: "عربي" },
 ];
 const ALL_LANGS = ["ms", "en", "ar"];
+
+// localStorage key remembering the khatib's chosen mic between sessions.
+const MIC_KEY = "masjidos-khutbah-mic";
+
+/**
+ * Pick the best mic to default to: keep the current selection if still present,
+ * else the last-used (persisted) device, else a wireless/bluetooth/lavalier
+ * input (typically the khatib's mimbar mic), else the first input.
+ */
+function pickPreferredMic(ins, currentId) {
+  if (currentId && ins.some((d) => d.deviceId === currentId)) return currentId;
+  try {
+    const saved = localStorage.getItem(MIC_KEY);
+    if (saved && ins.some((d) => d.deviceId === saved)) return saved;
+  } catch {
+    /* storage disabled */
+  }
+  const wireless = ins.find((d) =>
+    /bluetooth|wireless|headset|airpod|lav|lapel|lapierre|mimbar/i.test(d.label || ""),
+  );
+  if (wireless) return wireless.deviceId;
+  return ins[0]?.deviceId || "";
+}
 
 /**
  * Khutbah control (admin phone).
@@ -51,8 +75,9 @@ export default function KhutbahClient({
   const engineRef = useRef(null);
 
   // Enumerate microphones. Labels only appear AFTER mic permission is granted,
-  // so we request a quick permission probe first, then list devices.
-  const refreshMics = async () => {
+  // so we request a quick permission probe first, then list devices. Stable
+  // identity (useCallback) so we can (de)register the devicechange listener.
+  const refreshMics = useCallback(async () => {
     try {
       const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
       probe.getTracks().forEach((t) => t.stop());
@@ -63,18 +88,33 @@ export default function KhutbahClient({
       const devices = await navigator.mediaDevices.enumerateDevices();
       const ins = devices.filter((d) => d.kind === "audioinput");
       setMics(ins);
-      if (ins.length && !ins.some((d) => d.deviceId === micId)) {
-        setMicId(ins[0].deviceId);
-      }
+      setMicId((cur) => pickPreferredMic(ins, cur));
     } catch {
       /* enumeration unsupported */
     }
-  };
-
-  useEffect(() => {
-    if (typeof navigator !== "undefined" && navigator.mediaDevices) refreshMics();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Refresh on mount AND whenever devices change — so plugging in / pairing the
+  // khatib's Bluetooth mic mid-setup updates the picker live.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices) return;
+    refreshMics();
+    const md = navigator.mediaDevices;
+    md.addEventListener?.("devicechange", refreshMics);
+    return () => md.removeEventListener?.("devicechange", refreshMics);
+  }, [refreshMics]);
+
+  // Keep the phone awake while a khutbah is being streamed (mic OR typed). The
+  // lock auto-releases on background and re-acquires when the admin returns.
+  const wakeLockRef = useRef(null);
+  useEffect(() => {
+    wakeLockRef.current = createWakeLock();
+    return () => wakeLockRef.current?.release();
+  }, []);
+  useEffect(() => {
+    if (live) wakeLockRef.current?.acquire();
+    else wakeLockRef.current?.release();
+  }, [live]);
 
   // Subscribe to our own channel as admin (so we can SEND transcript broadcasts).
   useEffect(() => {
@@ -231,7 +271,14 @@ export default function KhutbahClient({
                   <div className="relative">
                     <select
                       value={micId}
-                      onChange={(e) => setMicId(e.target.value)}
+                      onChange={(e) => {
+                        setMicId(e.target.value);
+                        try {
+                          localStorage.setItem(MIC_KEY, e.target.value);
+                        } catch {
+                          /* storage disabled */
+                        }
+                      }}
                       disabled={["live", "starting", "reconnecting", "no-speech"].includes(engineState)}
                       className="w-full appearance-none rounded-xl border border-white/10 bg-midnight-950/70 px-4 py-2.5 pr-9 text-sm text-white outline-none ring-gold-500/40 focus:ring-2 disabled:opacity-50"
                     >
